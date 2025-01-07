@@ -121,8 +121,9 @@ async function makeTradeRequest(data: string): Promise<string> {
     });
 
     const responseText = await response.text();
-    console.log(chalk.dim('Response:'));
-    console.log(chalk.gray(responseText));
+    // Remove raw response logging unless in debug mode
+    // console.log(chalk.dim('Response:'));
+    // console.log(chalk.gray(responseText));
 
     try {
       const decodedResponse = Buffer.from(responseText, 'base64').toString();
@@ -196,6 +197,31 @@ const renderStats = (stats: Stats) => {
   );
 };
 
+// Add this helper function for concurrent requests
+const createRequestQueue = (maxConcurrent: number = 3) => {
+  const queue: Promise<any>[] = [];
+  let shouldStop = false;
+
+  return {
+    addToQueue: async function <T>(task: () => Promise<T>): Promise<T> {
+      if (shouldStop) {
+        throw new Error('Queue stopped due to success');
+      }
+
+      if (queue.length >= maxConcurrent) {
+        await queue.shift();
+      }
+
+      const promise = task();
+      queue.push(promise);
+      return promise;
+    },
+    stop: () => {
+      shouldStop = true;
+    },
+  };
+};
+
 async function main() {
   // Clear console
   console.clear();
@@ -243,43 +269,52 @@ async function main() {
   const maxAttempts = argv['max-attempts'];
   const delay = argv['delay'];
 
+  const queue = createRequestQueue(3);
+  const pendingRequests: Promise<void>[] = [];
+
   while (attempt <= maxAttempts && (!success || noStop)) {
     console.log(chalk.blue(`Request #${attempt}...`));
 
-    try {
-      const decodedResponse = await makeTradeRequest(data);
-      console.log(chalk.dim('Decoded response:'));
-      console.log(chalk.gray(decodedResponse));
-      console.log();
+    const currentAttempt = attempt++;
 
-      if (decodedResponse.includes('Bought')) {
-        stats.successfulRequests++;
-        success = true;
-        console.log(chalk.green.bold('Success! Found "Bought" in response.'));
-        if (!noStop) {
-          renderStats(stats);
-          process.exit(0);
+    const requestPromise = queue.addToQueue(async () => {
+      try {
+        const decodedResponse = await makeTradeRequest(data);
+        console.log(chalk.dim(`\n[Request #${currentAttempt}]`));
+        console.log(chalk.gray(decodedResponse));
+
+        if (decodedResponse.includes('Bought')) {
+          stats.successfulRequests++;
+          success = true;
+          console.log(chalk.green.bold(`✓ Success! Found "Bought" in response.`));
+          if (!noStop) {
+            queue.stop();
+            console.log(); // Add empty line before stats
+            renderStats(stats);
+            process.exit(0);
+          }
+        } else {
+          stats.failedRequests++;
+          console.log(chalk.yellow(`✗ No "Bought" found.`));
         }
-      } else {
-        stats.failedRequests++;
-        console.log(chalk.yellow('No "Bought" found, trying again...'));
-        console.log();
-      }
 
-      attempt++;
-      stats.totalRequests++;
-      if (attempt <= maxAttempts) {
-        await sleep(delay);
+        stats.totalRequests++;
+      } catch (error) {
+        if (error instanceof Error && error.message === 'Queue stopped due to success') {
+          return; // Gracefully handle stopped queue
+        }
+        stats.decodeErrors++;
+        console.log(chalk.red(`[Request #${currentAttempt}] Request failed.`));
       }
-    } catch (error) {
-      stats.decodeErrors++;
-      console.log(chalk.red('Request failed, trying again...'));
-      attempt++;
-      if (attempt <= maxAttempts) {
-        await sleep(delay);
-      }
-    }
+    });
+
+    pendingRequests.push(requestPromise);
+
+    await sleep(delay);
   }
+
+  // Wait for all pending requests to complete before showing final stats
+  await Promise.all(pendingRequests);
 
   if (!success) {
     console.log(chalk.red.bold(`Maximum attempts (${maxAttempts}) reached without success`));
