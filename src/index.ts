@@ -42,13 +42,19 @@ const argv = yargs(hideBin(process.argv))
     alias: 'm',
     type: 'number',
     description: 'Maximum number of attempts',
-    default: 1,
+    default: 10000,
   })
   .option('delay', {
     alias: 'l',
     type: 'number',
     description: 'Delay between requests in seconds',
     default: 0.6,
+  })
+  .option('stop-on-decode-error', {
+    alias: 's',
+    type: 'boolean',
+    description: 'Stop if response cannot be decoded',
+    default: false,
   })
   .help()
   .alias('help', 'h')
@@ -72,8 +78,17 @@ async function makeTradeRequest(data: string): Promise<string> {
     console.log(chalk.dim('Response:'));
     console.log(chalk.gray(responseText));
 
-    const decodedResponse = Buffer.from(responseText, 'base64').toString();
-    return decodedResponse;
+    try {
+      const decodedResponse = Buffer.from(responseText, 'base64').toString();
+      return decodedResponse;
+    } catch (decodeError) {
+      console.log(chalk.yellow('Failed to decode response'));
+      if (argv['stop-on-decode-error']) {
+        console.log(chalk.red.bold('Stopping due to decode error'));
+        process.exit(1);
+      }
+      return responseText;
+    }
   } catch (error) {
     console.error(chalk.red('Request failed:'), error);
     throw error;
