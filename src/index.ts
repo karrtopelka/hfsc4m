@@ -56,6 +56,27 @@ const argv = yargs(hideBin(process.argv))
     description: 'Stop if response cannot be decoded',
     default: false,
   })
+  .option('release-time', {
+    alias: 'r',
+    type: 'string',
+    description:
+      'Token release time (format: "1/7/2025, 3:29:58 PM"). If not provided, starts immediately',
+    demandOption: false,
+    coerce: (arg: string) => {
+      if (!arg) return null;
+      const date = new Date(arg);
+      if (isNaN(date.getTime())) {
+        throw new Error('Invalid release time format. Use: "1/7/2025, 3:29:58 PM"');
+      }
+      return date;
+    },
+  })
+  .option('start-before', {
+    alias: 'b',
+    type: 'number',
+    description: 'Start buying X seconds before freeze time ends',
+    default: 5,
+  })
   .help()
   .alias('help', 'h')
   .parseSync();
@@ -102,14 +123,37 @@ async function makeTradeRequest(data: string): Promise<string> {
 
 async function main() {
   displayTitle();
+
+  const releaseTime = argv['release-time'] as Date | null;
+
+  if (releaseTime) {
+    const startBefore = argv['start-before'];
+    const freezeEndTime = new Date(releaseTime.getTime() + 60000);
+    const startTime = new Date(freezeEndTime.getTime() - startBefore * 1000);
+
+    console.log(chalk.cyan('Starting trade bot...\n'));
+    console.log(chalk.blue(`Release time: ${releaseTime.toLocaleString()}`));
+    console.log(chalk.blue(`Freeze ends: ${freezeEndTime.toLocaleString()}`));
+    console.log(chalk.blue(`Will start buying: ${startTime.toLocaleString()}\n`));
+
+    const now = new Date();
+    if (now < startTime) {
+      const waitMs = startTime.getTime() - now.getTime();
+      console.log(
+        chalk.yellow(`Waiting ${(waitMs / 1000).toFixed(1)} seconds until start time...`),
+      );
+      await sleep(waitMs / 1000);
+    }
+  } else {
+    console.log(chalk.cyan('Starting trade bot immediately...\n'));
+  }
+
   let attempt = 1;
   let success = false;
   const data = argv.data;
   const noStop = argv['no-stop'];
   const maxAttempts = argv['max-attempts'];
   const delay = argv['delay'];
-
-  console.log(chalk.cyan('Starting trade bot...\n'));
 
   while (attempt <= maxAttempts && (!success || noStop)) {
     console.log(chalk.blue(`Request #${attempt}...`));
