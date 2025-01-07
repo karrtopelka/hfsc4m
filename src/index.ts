@@ -3,6 +3,14 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import chalk from 'chalk';
 import figlet from 'figlet';
+import fsSync from 'fs';
+import boxen from 'boxen';
+
+process.on('SIGINT', () => {
+  console.log(chalk.yellow('\n\nGracefully shutting down...'));
+  console.log(chalk.blue('Please wait for current request to complete...'));
+  process.exit(0);
+});
 
 // Add this function to create ASCII art
 const displayTitle = () => {
@@ -77,6 +85,18 @@ const argv = yargs(hideBin(process.argv))
     description: 'Start buying X seconds before freeze time ends',
     default: 5,
   })
+  .option('config', {
+    alias: 'c',
+    type: 'string',
+    description: 'Path to config file',
+    coerce: (arg: string) => {
+      try {
+        return JSON.parse(fsSync.readFileSync(arg, 'utf8'));
+      } catch (error) {
+        throw new Error(`Failed to read config file: ${error}`);
+      }
+    },
+  })
   .help()
   .alias('help', 'h')
   .parseSync();
@@ -121,8 +141,74 @@ async function makeTradeRequest(data: string): Promise<string> {
   }
 }
 
+interface Stats {
+  totalRequests: number;
+  successfulRequests: number;
+  failedRequests: number;
+  startTime: number;
+  decodeErrors: number;
+  requestsPerSecond: number[];
+}
+
+const getMemoryUsage = () => {
+  const used = process.memoryUsage();
+  return {
+    heapUsed: Math.round(used.heapUsed / 1024 / 1024),
+    heapTotal: Math.round(used.heapTotal / 1024 / 1024),
+  };
+};
+
+type ChalkColor = 'blue' | 'green' | 'red' | 'yellow' | 'magenta' | 'gray' | 'cyan' | 'white';
+type StatItem = [string, string | number, ChalkColor];
+
+const renderStats = (stats: Stats) => {
+  const endTime = Date.now();
+  const runtime = ((endTime - stats.startTime) / 1000).toFixed(2);
+  const avgRequestRate = stats.totalRequests / parseFloat(runtime);
+  const memory = getMemoryUsage();
+
+  const statItems: StatItem[] = [
+    ['Total Requests', stats.totalRequests, 'blue'],
+    ['Successful Requests', stats.successfulRequests, 'green'],
+    ['Failed Requests', stats.failedRequests, 'red'],
+    ['Decode Errors', stats.decodeErrors, 'yellow'],
+    ['Total Runtime', `${runtime}s`, 'magenta'],
+    ['Avg Requests/Second', avgRequestRate.toFixed(2), 'blue'],
+    ['Memory Usage', `${memory.heapUsed}MB / ${memory.heapTotal}MB`, 'gray'],
+  ];
+
+  console.log(
+    boxen(
+      chalk.cyan.bold('Final Statistics\n\n') +
+        statItems
+          .map(
+            ([label, value, color]) =>
+              `${chalk.white(String(label).padEnd(20))}${chalk[color](value)}`,
+          )
+          .join('\n'),
+      {
+        padding: 1,
+        margin: 1,
+        borderStyle: 'round',
+        borderColor: 'cyan',
+      },
+    ),
+  );
+};
+
 async function main() {
+  // Clear console
+  console.clear();
+
   displayTitle();
+  const stats = {
+    totalRequests: 0,
+    successfulRequests: 0,
+    failedRequests: 0,
+    startTime: Date.now(),
+    decodeErrors: 0,
+    requestsPerSecond: [],
+  };
 
   const releaseTime = argv['release-time'] as Date | null;
 
@@ -139,9 +225,11 @@ async function main() {
     const now = new Date();
     if (now < startTime) {
       const waitMs = startTime.getTime() - now.getTime();
+
       console.log(
         chalk.yellow(`Waiting ${(waitMs / 1000).toFixed(1)} seconds until start time...`),
       );
+
       await sleep(waitMs / 1000);
     }
   } else {
@@ -165,20 +253,26 @@ async function main() {
       console.log();
 
       if (decodedResponse.includes('Bought')) {
+        stats.successfulRequests++;
         success = true;
         console.log(chalk.green.bold('Success! Found "Bought" in response.'));
         if (!noStop) {
+          renderStats(stats);
           process.exit(0);
         }
       } else {
+        stats.failedRequests++;
         console.log(chalk.yellow('No "Bought" found, trying again...'));
         console.log();
       }
+
       attempt++;
+      stats.totalRequests++;
       if (attempt <= maxAttempts) {
         await sleep(delay);
       }
     } catch (error) {
+      stats.decodeErrors++;
       console.log(chalk.red('Request failed, trying again...'));
       attempt++;
       if (attempt <= maxAttempts) {
@@ -189,9 +283,11 @@ async function main() {
 
   if (!success) {
     console.log(chalk.red.bold(`Maximum attempts (${maxAttempts}) reached without success`));
+    renderStats(stats);
     process.exit(1);
   } else {
     console.log(chalk.green.bold(`Maximum attempts (${maxAttempts}) reached`));
+    renderStats(stats);
     process.exit(0);
   }
 }
