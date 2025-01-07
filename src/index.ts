@@ -168,7 +168,7 @@ const renderStats = (stats: Stats) => {
   const memory = getMemoryUsage();
 
   const statItems: StatItem[] = [
-    ['Total Requests', stats.totalRequests, 'blue'],
+    ['Total Requests', stats.totalRequests + 1, 'blue'],
     ['Successful Requests', stats.successfulRequests, 'green'],
     ['Failed Requests', stats.failedRequests, 'red'],
     ['Decode Errors', stats.decodeErrors, 'yellow'],
