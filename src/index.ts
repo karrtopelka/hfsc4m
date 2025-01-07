@@ -47,7 +47,7 @@ const argv = yargs(hideBin(process.argv))
   .option('delay', {
     alias: 'l',
     type: 'number',
-    description: 'Delay between requests in seconds',
+    description: 'Base delay between requests in seconds (will vary ±20%)',
     default: 0.6,
   })
   .option('stop-on-decode-error', {
@@ -60,7 +60,12 @@ const argv = yargs(hideBin(process.argv))
   .alias('help', 'h')
   .parseSync();
 
-const sleep = (seconds: number) => new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+// Update sleep function to add random jitter
+const sleep = (seconds: number) => {
+  // Add random variation between -20% to +20% of the base delay
+  const jitter = seconds * (0.8 + Math.random() * 0.4);
+  return new Promise((resolve) => setTimeout(resolve, jitter * 1000));
+};
 
 async function makeTradeRequest(data: string): Promise<string> {
   const url = 'https://telegram.hypurr.fun/hypurr.Telegram/HyperliquidLaunchTrade';
